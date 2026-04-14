@@ -20,7 +20,7 @@ pipeline {
         }
         stage('Checkout Code') {
             steps {
-                git branch: 'main', url: 'git@github.com:Acedoggie/gcheck.git' 
+                git branch: 'main', url: 'https://github.com/Acedoggie/gcheck.git' 
             }
         }
 
