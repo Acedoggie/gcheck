@@ -2,83 +2,122 @@ pipeline {
     agent any
 
     environment {
-        AWS_DEFAULT_REGION = 'ap-east-1'
-        TF_IN_AUTOMATION = 'true'
-        TF_VERSION = '1.9.8'
+        AWS_REGION = 'ap-east-1'
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                git branch: 'main', url: 'https://github.com/Acedoggie/gcheck.git'
-            }
-        }
-
-        stage('Terraform Format') {
-            steps {
-                // Fails the build if code is not properly formatted
-                sh 'terraform fmt -check'
-            }
-        }
-
-        stage('Terraform Init') {
+        stage('Set AWS Credentials') {
             steps {
                 withCredentials([[
                     $class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'jenkins-test-01'
                 ]]) {
                     sh '''
-                    terraform init \
-                    -backend-config="bucket=jenkins-321528232261-ap-east-1-an" \
-                    -backend-config="key=jenkins/jenkins-s3-kdm.tfstate" \
-                    -backend-config="region=us-east-2" \
-                    -backend-config="encrypt=true"
+                    export AWS_DEFAULT_REGION=$AWS_REGION
+                    aws sts get-caller-identity
                     '''
+                }
+            }
+        }
+
+        stage('Terraform Format Check') {
+            steps {
+                dir('week27-hw-jenkins/terraform') {
+                    sh '''
+                    terraform fmt -check
+                    '''
+                }
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir('week27-hw-jenkins/terraform') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'jenkins-test-01'
+                    ]]) {
+                        sh '''
+                        export AWS_DEFAULT_REGION=$AWS_REGION
+                        terraform init
+                        '''
+                    }
                 }
             }
         }
 
         stage('Terraform Validate') {
             steps {
-                // Requirement Met: Ensures configuration is syntactically valid and internally consistent
-                sh 'terraform validate'
-            }
-        }
-
-        stage('Terraform Plan & Apply') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'jenkins-test-01'
-                ]]) {
+                dir('week27-hw-jenkins/terraform') {
                     sh '''
-                    terraform plan -out=tfplan
-                    terraform apply -auto-approve tfplan
+                    terraform validate
                     '''
                 }
             }
         }
 
-        stage('Optional Destroy') {
+        stage('Terraform Plan') {
+            steps {
+                dir('week27-hw-jenkins/terraform') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'jenkins-test-01'
+                    ]]) {
+                        sh '''
+                        export AWS_DEFAULT_REGION=$AWS_REGION
+                        terraform plan -out=tfplan
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                input message: 'Approve Terraform Apply?', ok: 'Deploy'
+                dir('week27-hw-jenkins/terraform') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'jenkins-test-01'
+                    ]]) {
+                        sh '''
+                        export AWS_DEFAULT_REGION=$AWS_REGION
+                        terraform apply -auto-approve tfplan
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Destroy (Optional)') {
             steps {
                 script {
                     def destroyChoice = input(
-                        message: 'Do you want to initiate terraform destroy?',
+                        message: 'Do you want to run terraform destroy?',
                         ok: 'Submit',
                         parameters: [
-                            choice(name: 'DESTROY', choices: ['no', 'yes'], description: 'Select yes to destroy resources')
+                            choice(
+                                name: 'DESTROY',
+                                choices: ['no', 'yes'],
+                                description: 'Select yes to destroy resources'
+                            )
                         ]
                     )
 
                     if (destroyChoice == 'yes') {
-                        withCredentials([[
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'jenkins-test-01'
-                        ]]) {
-                            sh 'terraform destroy -auto-approve'
+                        dir('week27-hw-jenkins/terraform') {
+                            withCredentials([[
+                                $class: 'AmazonWebServicesCredentialsBinding',
+                                credentialsId: 'jenkins-test-01'
+                            ]]) {
+                                sh '''
+                                export AWS_DEFAULT_REGION=$AWS_REGION
+                                terraform destroy -auto-approve
+                                '''
+                            }
                         }
                     } else {
-                        echo "Skipping destroy stage as requested."
+                        echo "Skipping destroy"
                     }
                 }
             }
@@ -86,8 +125,11 @@ pipeline {
     }
 
     post {
-        always {
-            cleanWs() // Good practice: Clean the workspace after the run
+        success {
+            echo 'Terraform pipeline completed successfully!'
+        }
+        failure {
+            echo 'Terraform pipeline failed!'
         }
     }
 }
